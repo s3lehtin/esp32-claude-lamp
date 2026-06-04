@@ -27,11 +27,13 @@ Compiles clean. (Visual check lands in T3's smoke test.)
 
 ## T2 — Firmware: bar rendering
 
-**ACs**: AC-2, AC-3, AC-4, AC-5. **Files**: `firmware/claude_lamp/claude_lamp.ino`
+**ACs**: AC-2, AC-3, AC-4, AC-5, AC-14. **Files**: `firmware/claude_lamp/claude_lamp.ino`
 
-- Implement `barColor()` (integer green→yellow→red ramp), `renderBar()` (full /
-  fractional-dim / dark per LED, `-1` → all dark), `renderUsageBars()`.
-- Call `renderUsageBars()` from `renderFrame()` every frame, before `show()`,
+- Implement `barColor()` (integer green→yellow→red ramp), `renderBar(start, util, now)`
+  (full / fractional-dim / dark per LED, `-1` → all dark), `renderUsageBars(now)`.
+- Blink: when `util >= BLINK_THRESHOLD` (95), bar alternates full pattern / dark at
+  ~1 Hz using `now % BLINK_PERIOD_MS` (AC-14); steady below threshold.
+- Call `renderUsageBars(now)` from `renderFrame()` every frame, before `show()`,
   skipped only in `STATE_OFF`.
 
 **Verify**:
@@ -39,7 +41,8 @@ Compiles clean. (Visual check lands in T3's smoke test.)
 make compile
 ```
 Desk-check the math: u=73 → LEDs at 255, 255, 255, 65 %, 0; u=0 → all dark;
-u=100 → all full red; u=50 → 2 full + 1 half, yellow (r=255,g=255).
+u=100 → all full red; u=50 → 2 full + 1 half, yellow (r=255,g=255);
+u=94 → steady; u=95 → blinking; u=-1 → steadily dark (blink path unreachable).
 
 ---
 
@@ -64,7 +67,9 @@ working            # breathing confined to LEDs 1–20 (AC-1)
 usage 73,12        # 7d: 3 full + 1 dim + 1 dark; 5h: 1 dim (AC-2); no flicker (AC-4)
 usage 100,0        # 7d all red (AC-3), 5h dark
 usage 0,100        # inverse
-usage 999,-5       # clamps to 100,0 (AC-6 edge)
+usage 95,94        # 7d bar blinks ~1 Hz, 5h bar steady (AC-14)
+usage 100,100      # both bars blink red, in sync; status animation unaffected (AC-14)
+usage 999,-5       # clamps to 100,0 → 7d blinks (AC-6 edge, AC-14)
 usage garbage      # ignored, serial message, bars unchanged (AC-6)
 usage -            # both bars dark (AC-5), status animation unchanged (AC-6)
 input              # bars persist over purple pulse (AC-4)

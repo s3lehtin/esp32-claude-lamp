@@ -36,6 +36,8 @@ After the config block (~line 34):
 #define BAR7_START   20   // 7-day bar: indices 20..24
 #define BAR5_START   25   // 5-hour bar: indices 25..29
 #define BAR_LEN       5
+#define BLINK_THRESHOLD  95   // util >= this -> bar blinks (AC-14)
+#define BLINK_PERIOD_MS  1000 // ~1 Hz: 500 ms on, 500 ms off
 ```
 
 Alongside `lampState` (~line 48):
@@ -79,15 +81,15 @@ static void renderFrame(uint32_t now) {
     case STATE_COLOR:   fillColor(customR, customG, customB); break;
     default: break;
   }
-  renderUsageBars();   // repainted every frame — idempotent, 10 setPixelColor calls
-  strip.show();        // single show per frame
+  renderUsageBars(now);  // repainted every frame — idempotent, 10 setPixelColor calls
+  strip.show();          // single show per frame
 }
 ```
 
 Bars are repainted every frame rather than maintained on change: removes all ordering
 hazards with the per-frame animations at negligible cost.
 
-### Bar rendering (AC-2, AC-3)
+### Bar rendering (AC-2, AC-3, AC-14)
 
 ```cpp
 // 0..50 ramps green→yellow, 50..100 yellow→red; whole bar one hue (AC-3)
@@ -99,7 +101,12 @@ static uint32_t barColor(int u) {
   return strip.Color(r, g, 0);
 }
 
-static void renderBar(int start, int util) {       // util -1 → all dark (AC-5)
+static void renderBar(int start, int util, uint32_t now) {  // util -1 → all dark (AC-5)
+  // Imminent limit: blink whole bar at ~1 Hz (AC-14)
+  if (util >= BLINK_THRESHOLD && (now % BLINK_PERIOD_MS) >= BLINK_PERIOD_MS / 2) {
+    for (int i = 0; i < BAR_LEN; i++) strip.setPixelColor(start + i, 0);
+    return;                                         // dark half of the blink cycle
+  }
   uint32_t col = barColor(util);
   for (int i = 0; i < BAR_LEN; i++) {
     int px = start + i, lo = i * 20, hi = lo + 20;  // LED i covers [lo, hi)
@@ -115,13 +122,19 @@ static void renderBar(int start, int util) {       // util -1 → all dark (AC-5
   }
 }
 
-static void renderUsageBars() {
-  renderBar(BAR7_START, util7);
-  renderBar(BAR5_START, util5);
+static void renderUsageBars(uint32_t now) {
+  renderBar(BAR7_START, util7, now);
+  renderBar(BAR5_START, util5, now);
 }
 ```
 
 Per-pixel fractional dimming composes with the global `strip.setBrightness()` cap — intended.
+
+Blink notes: keyed off the same `millis()` already passed into `renderFrame()` — no new
+timers. `now % BLINK_PERIOD_MS` gives a free-running 1 Hz square wave; both bars share
+phase (blink in sync) when both are ≥ 95 %, which reads as intentional. The blink check
+precedes the `-1` handling order-wise but is unreachable for `util < 0`, so unknown bars
+stay steadily dark.
 
 ### BLE protocol addition (AC-6)
 
@@ -269,8 +282,9 @@ old daemon + new firmware → bars dark.
    the `sscanf`/`constrain` additions.
 2. **BLE smoke test** (README's manual write procedure, RX `6e400002-…`):
    `working` → `usage 73,12` (3 full + 1 dim + 1 dark / 1 dim) → `usage 100,0` →
-   `usage 0,100` → `usage -` → `idle` → `bright 200` → `off`. Verify AC-1…AC-7:
-   bars persist over animations without flicker, status confined to LEDs 1–20,
+   `usage 0,100` → `usage 95,94` (7d blinks, 5h steady) → `usage -` → `idle` →
+   `bright 200` → `off`. Verify AC-1…AC-7 + AC-14: bars persist over animations
+   without flicker, status confined to LEDs 1–20, ≥95 % blinks at ~1 Hz,
    `off` darkens everything.
 3. **Live validation gate (T4)**: dump keychain JSON and curl the endpoint manually to
    confirm A-1/A-2 **before** writing daemon code; update this design if schemas differ.

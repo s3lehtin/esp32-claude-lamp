@@ -35,6 +35,9 @@ LEDs 26–30 (strip indices 25–29) show the **5-hour window** utilization.
 - **AC-7**: `bright N` continues to scale the whole strip (status + bars) and takes
   visual effect within one animation tick in every state. Existing commands
   (`working`/`idle`/`input`/`off`/`color R,G,B`) behave exactly as before on indices 0–19.
+- **AC-14**: When a bar's utilization is ≥ 95 % (imminent limit), that bar blinks at
+  ~1 Hz (500 ms full bar pattern, 500 ms dark). Each bar blinks independently; the other
+  bar and the status animation are unaffected. Below 95 % the bar is steady.
 
 ### Data fetch & refresh (daemon)
 
@@ -100,8 +103,8 @@ LEDs 26–30 (strip indices 25–29) show the **5-hour window** utilization.
 
 ## Open questions
 
-- **Q-1**: Should bars blink or change style when utilization ≥ ~95% (imminent limit)?
-  Current spec: solid red only.
+- **Q-1**: ~~Should bars blink when utilization ≥ ~95%?~~ **Resolved (user, 2026-06-04):
+  yes — bar blinks at ~1 Hz when its utilization ≥ 95 % (AC-14).**
 - **Q-2**: Should `resets_at` ever be surfaced (e.g. pulsing near reset)? Out of scope now.
 - **Q-3**: If the OAuth endpoint breaks permanently, is a ccusage-style local estimate an
   acceptable fallback? Out of scope now.
