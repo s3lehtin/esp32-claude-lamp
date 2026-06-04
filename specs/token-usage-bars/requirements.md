@@ -19,25 +19,31 @@ LEDs 26–30 (strip indices 25–29) show the **5-hour window** utilization.
 
 - **AC-1**: Strip indices 20–24 render the 7-day bar; indices 25–29 render the 5-hour bar.
   Status animations (working/idle/input/color) touch only indices 0–19.
-- **AC-2**: Each bar LED represents 20 percentage points. For utilization `u` (0–100):
-  LEDs whose full 20%-segment is below `u` are fully lit; the LED containing `u` is dimmed
-  proportionally to the fractional part (`(u mod 20)/20` of full color); LEDs above `u` are dark.
-  Examples: `u=73` → 3 full + 1 at 65% + 1 dark; `u=0` → all dark; `u=100` → all full.
-- **AC-3**: Bar color ramps green → yellow → red with the bar's own utilization:
+- **AC-2** *(fuel gauge — revised 2026-06-04)*: Each bar LED represents 20 percentage
+  points of **remaining** budget `r = 100 − u`. LEDs whose full 20%-segment is below `r`
+  are fully lit; the LED containing `r` is dimmed proportionally (`(r mod 20)/20` of full
+  color); LEDs above `r` are dark — the bar *drains* as usage grows.
+  Examples: `u=0` → all 5 lit; `u=73` (r=27) → 1 full + 1 at 35% + 3 dark;
+  `u=80` (r=20) → 1 full; `u≥95` → see AC-14.
+- **AC-3**: Bar color ramps green → yellow → red with the bar's own **utilization**:
   green at 0%, yellow at 50%, red at 100% (linear integer interpolation, whole bar one hue).
+  A full gauge is green; a draining gauge turns yellow then red.
 - **AC-4**: Bars persist unchanged across all status states and animation frames
   (no flicker from status animation `show()` calls). In `off` state all 30 LEDs are dark.
 - **AC-5**: Before any usage data arrives (firmware boot default) and after an explicit
-  clear, both bars are dark. Internal sentinel: utilization `-1` = unknown.
+  clear, both bars are dark. Internal sentinel: utilization `-1` = unknown. With
+  fuel-gauge semantics this stays unambiguous: exhausted (100%) shows a blinking red LED
+  (AC-14), never full dark.
 - **AC-6**: New BLE command `usage P7,P5` (ASCII, e.g. `usage 73,12`) sets both bars
   atomically; `usage -` clears both to unknown. The command does not change `lampState`.
   Values are clamped to 0–100; malformed input is ignored with a serial log line.
 - **AC-7**: `bright N` continues to scale the whole strip (status + bars) and takes
   visual effect within one animation tick in every state. Existing commands
   (`working`/`idle`/`input`/`off`/`color R,G,B`) behave exactly as before on indices 0–19.
-- **AC-14**: When a bar's utilization is ≥ 95 % (imminent limit), that bar blinks at
-  ~1 Hz (500 ms full bar pattern, 500 ms dark). Each bar blinks independently; the other
-  bar and the status animation are unaffected. Below 95 % the bar is steady.
+- **AC-14** *(revised 2026-06-04)*: When a bar's utilization is ≥ 95 % (imminent limit),
+  that bar shows **exactly one full-brightness red LED blinking at ~1 Hz** (500 ms on,
+  500 ms off), overriding the proportional fill. Each bar blinks independently; the
+  other bar and the status animation are unaffected. Below 95 % the bar is steady.
 
 ### Data fetch & refresh (daemon)
 

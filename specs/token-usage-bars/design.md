@@ -101,19 +101,27 @@ static uint32_t barColor(int u) {
   return strip.Color(r, g, 0);
 }
 
-static void renderBar(int start, int util, uint32_t now) {  // util -1 → all dark (AC-5)
-  // Imminent limit: blink whole bar at ~1 Hz (AC-14)
-  if (util >= BLINK_THRESHOLD && (now % BLINK_PERIOD_MS) >= BLINK_PERIOD_MS / 2) {
+// Fuel gauge (revised 2026-06-04): paint REMAINING budget (100-util) — full at
+// 0% usage, drains as usage grows. Hue still keyed to usage via barColor(util).
+static void renderBar(int start, int util, uint32_t now) {
+  if (util < 0) {                                   // unknown → all dark (AC-5)
     for (int i = 0; i < BAR_LEN; i++) strip.setPixelColor(start + i, 0);
-    return;                                         // dark half of the blink cycle
+    return;
   }
-  uint32_t col = barColor(util);
+  if (util >= BLINK_THRESHOLD) {                    // imminent-limit alarm (AC-14):
+    bool on = (now % BLINK_PERIOD_MS) < BLINK_PERIOD_MS / 2;  // one full red LED,
+    strip.setPixelColor(start, on ? strip.Color(255, 0, 0) : 0);  // blinking ~1 Hz
+    for (int i = 1; i < BAR_LEN; i++) strip.setPixelColor(start + i, 0);
+    return;
+  }
+  int remaining = 100 - util;                       // fuel left (AC-2)
+  uint32_t col = barColor(util);                    // hue keyed to usage (AC-3)
   for (int i = 0; i < BAR_LEN; i++) {
-    int px = start + i, lo = i * 20, hi = lo + 20;  // LED i covers [lo, hi)
-    if (util >= hi)      strip.setPixelColor(px, col);          // full
-    else if (util <= lo) strip.setPixelColor(px, 0);            // dark (covers util<0)
+    int px = start + i, lo = i * 20, hi = lo + 20;  // LED i covers [lo, hi) of remaining
+    if (remaining >= hi)      strip.setPixelColor(px, col);     // full
+    else if (remaining <= lo) strip.setPixelColor(px, 0);       // drained
     else {                                                      // fractional (AC-2)
-      int frac = util - lo;                                     // 1..19
+      int frac = remaining - lo;                                // 1..19
       strip.setPixelColor(px, strip.Color(
         (uint8_t)(((col >> 16) & 0xFF) * frac / 20),
         (uint8_t)(((col >>  8) & 0xFF) * frac / 20),
@@ -132,9 +140,9 @@ Per-pixel fractional dimming composes with the global `strip.setBrightness()` ca
 
 Blink notes: keyed off the same `millis()` already passed into `renderFrame()` — no new
 timers. `now % BLINK_PERIOD_MS` gives a free-running 1 Hz square wave; both bars share
-phase (blink in sync) when both are ≥ 95 %, which reads as intentional. The blink check
-precedes the `-1` handling order-wise but is unreachable for `util < 0`, so unknown bars
-stay steadily dark.
+phase (blink in sync) when both are ≥ 95 %, which reads as intentional. The alarm shows
+exactly one full-brightness red LED (first of the bar) so an exhausted budget (100 %)
+remains visually distinct from "no data" (fully dark, `-1`).
 
 ### BLE protocol addition (AC-6)
 
@@ -281,11 +289,12 @@ old daemon + new firmware → bars dark.
 1. **Compile**: `make compile` after each firmware task — zero warnings tolerated for
    the `sscanf`/`constrain` additions.
 2. **BLE smoke test** (README's manual write procedure, RX `6e400002-…`):
-   `working` → `usage 73,12` (3 full + 1 dim + 1 dark / 1 dim) → `usage 100,0` →
-   `usage 0,100` → `usage 95,94` (7d blinks, 5h steady) → `usage -` → `idle` →
-   `bright 200` → `off`. Verify AC-1…AC-7 + AC-14: bars persist over animations
-   without flicker, status confined to LEDs 1–20, ≥95 % blinks at ~1 Hz,
-   `off` darkens everything.
+   `working` → `usage 0,0` (both gauges 5× green) → `usage 73,12` (7d: 1 full + 1 at
+   35 %; 5h: 4 full + 1 at 40 %, greenish) → `usage 100,0` (7d single blinking red,
+   5h full green) → `usage 95,94` (7d blinks, 5h: 1 LED at 30 %, steady) → `usage -` →
+   `idle` → `bright 200` → `off`. Verify AC-1…AC-7 + AC-14: gauges drain as usage
+   rises, persist over animations without flicker, status confined to LEDs 1–20,
+   ≥95 % shows one blinking red LED, `off` darkens everything.
 3. **Live validation gate (T4)**: dump keychain JSON and curl the endpoint manually to
    confirm A-1/A-2 **before** writing daemon code; update this design if schemas differ.
 4. **Daemon unit-ish**: `claude_hooks/venv/bin/python3 claude_lamp_daemon.py --once` →
