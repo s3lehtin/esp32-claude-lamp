@@ -12,6 +12,12 @@
  *   off              all LEDs dark
  *   color R,G,B      solid color (0-255 each)
  *   bright N         global brightness cap (0-255)
+ *   usage P7,P5      token utilization bargraphs: 7-day % on LEDs 21-25,
+ *                    5-hour % on LEDs 26-30 (0-100 each, >=95 blinks)
+ *   usage -          clear both usage bars (unknown -> dark)
+ *
+ * Status animations use LEDs 1-20; usage bars persist across all states
+ * except "off".
  *
  * Board: classic ESP32 DevKit (esp32:esp32:esp32)
  * Libraries: Adafruit NeoPixel, NimBLE-Arduino (2.x API)
@@ -33,6 +39,14 @@
 
 #define FRAME_INTERVAL_MS 20         // ~50 fps animation tick
 
+// Strip partition: status animation on 0..19, usage bargraphs on 20..29.
+#define STATUS_LEDS    20            // indices 0..19: status animation
+#define BAR7_START     20            // 7-day usage bar: indices 20..24
+#define BAR5_START     25            // 5-hour usage bar: indices 25..29
+#define BAR_LEN         5
+#define BLINK_THRESHOLD 95           // util >= this -> bar blinks (imminent limit)
+#define BLINK_PERIOD_MS 1000         // ~1 Hz: 500 ms on, 500 ms off
+
 // ---------- State ----------
 enum LampState : uint8_t {
   STATE_OFF,
@@ -46,17 +60,20 @@ Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 volatile LampState lampState = STATE_OFF;
 volatile uint8_t customR = 0, customG = 0, customB = 0;
+volatile int16_t util7 = -1;         // 7-day utilization 0..100, -1 = unknown (bar dark)
+volatile int16_t util5 = -1;         // 5-hour utilization 0..100, -1 = unknown
+volatile bool forceRender = false;   // set by "bright" to repaint static states
 
 // ---------- Animation helpers ----------
 static uint8_t lerp8(uint8_t a, uint8_t b, float t) {
   return (uint8_t)(a + (b - a) * t);
 }
 
+// Fill the status area only; strip.show() happens once per frame in renderFrame().
 static void fillColor(uint8_t r, uint8_t g, uint8_t b) {
-  for (int i = 0; i < LED_COUNT; i++) {
+  for (int i = 0; i < STATUS_LEDS; i++) {
     strip.setPixelColor(i, strip.Color(r, g, b));
   }
-  strip.show();
 }
 
 // working: breathe between white and navy, 4 s period
@@ -72,10 +89,56 @@ static void animInput(uint32_t now) {
   fillColor((uint8_t)(180 * level), 0, (uint8_t)(255 * level));
 }
 
+// ---------- Usage bargraphs (indices 20..29) ----------
+// Map utilization 0..100 to green -> yellow -> red; whole bar one hue.
+static uint32_t barColor(int u) {
+  u = constrain(u, 0, 100);
+  uint8_t r, g;
+  if (u <= 50) { r = (uint8_t)(255 * u / 50);         g = 255; }  // green -> yellow
+  else         { r = 255; g = (uint8_t)(255 * (100 - u) / 50); }  // yellow -> red
+  return strip.Color(r, g, 0);
+}
+
+// Paint one 5-LED bar: each LED = 20%, last LED dimmed by the fractional part.
+// util -1 -> all dark (unknown). util >= BLINK_THRESHOLD -> ~1 Hz blink.
+static void renderBar(int start, int util, uint32_t now) {
+  if (util >= BLINK_THRESHOLD && (now % BLINK_PERIOD_MS) >= BLINK_PERIOD_MS / 2) {
+    for (int i = 0; i < BAR_LEN; i++) strip.setPixelColor(start + i, 0);
+    return;  // dark half of the blink cycle
+  }
+  uint32_t col = barColor(util);
+  for (int i = 0; i < BAR_LEN; i++) {
+    int px = start + i, lo = i * 20, hi = lo + 20;  // LED i covers [lo, hi)
+    if (util >= hi) {
+      strip.setPixelColor(px, col);                 // fully lit
+    } else if (util <= lo) {
+      strip.setPixelColor(px, 0);                   // dark (covers util < 0)
+    } else {
+      int frac = util - lo;                         // 1..19 -> proportional dim
+      strip.setPixelColor(px, strip.Color(
+          (uint8_t)(((col >> 16) & 0xFF) * frac / 20),
+          (uint8_t)(((col >>  8) & 0xFF) * frac / 20),
+          (uint8_t)(( col        & 0xFF) * frac / 20)));
+    }
+  }
+}
+
+static void renderUsageBars(uint32_t now) {
+  renderBar(BAR7_START, util7, now);
+  renderBar(BAR5_START, util5, now);
+}
+
 static void renderFrame(uint32_t now) {
   static LampState lastRendered = STATE_OFF;
-  bool entered = (lampState != lastRendered);
+  bool entered = (lampState != lastRendered) || forceRender;
   lastRendered = lampState;
+  forceRender = false;
+
+  if (lampState == STATE_OFF) {
+    strip.clear();   // all 30 dark, usage bars included
+    strip.show();
+    return;
+  }
 
   switch (lampState) {
     case STATE_WORKING: animWorking(now); break;
@@ -86,10 +149,10 @@ static void renderFrame(uint32_t now) {
     case STATE_COLOR:
       fillColor(customR, customG, customB);  // re-fill: customRGB may change
       break;
-    case STATE_OFF:
-      if (entered) { strip.clear(); strip.show(); }
-      break;
+    default: break;
   }
+  renderUsageBars(now);  // bars persist across all non-off states
+  strip.show();          // single show per frame
 }
 
 // ---------- Command parsing ----------
@@ -117,9 +180,23 @@ static void handleCommand(const std::string &raw) {
     int n;
     if (sscanf(cmd.c_str() + 7, "%d", &n) == 1) {
       strip.setBrightness(constrain(n, 0, 255));
-      // force re-render of static states at the new brightness
-      if (lampState == STATE_IDLE) fillColor(255, 140, 30);
-      else if (lampState == STATE_COLOR) fillColor(customR, customG, customB);
+      forceRender = true;  // repaint static states at the new brightness next tick
+    }
+  } else if (cmd.startsWith("usage ")) {
+    // "usage P7,P5" sets the bars (0-100 each); "usage -" clears to unknown.
+    // Never touches lampState — usage stays orthogonal to status.
+    const char *arg = cmd.c_str() + 6;
+    if (arg[0] == '-') {
+      util7 = -1;
+      util5 = -1;
+    } else {
+      int a, b;
+      if (sscanf(arg, "%d,%d", &a, &b) == 2) {
+        util7 = (int16_t)constrain(a, 0, 100);
+        util5 = (int16_t)constrain(b, 0, 100);
+      } else {
+        Serial.println("Bad usage syntax, expected: usage P7,P5 or usage -");
+      }
     }
   } else {
     Serial.println("Unknown command");
