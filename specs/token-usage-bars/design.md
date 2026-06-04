@@ -184,12 +184,20 @@ and the resulting `send()` happens back on the main loop.
 ### New constants & helpers (stdlib only — no new venv deps)
 
 ```python
-USAGE_POLL_INTERVAL = 60            # seconds (AC-9)
-USAGE_FAIL_CLEAR_THRESHOLD = 3      # consecutive failures → "usage -" (AC-10)
+USAGE_POLL_INTERVAL = 180           # baseline seconds (AC-9, rev. after 429s)
+USAGE_BACKOFF_MAX = 1800            # cap for HTTP 429 exponential backoff (AC-15)
+USAGE_FAIL_CLEAR_THRESHOLD = 3      # consecutive hard failures → "usage -" (AC-10)
 KEYCHAIN_ITEM = "Claude Code-credentials"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 OAUTH_BETA = "oauth-2025-04-20"
 ```
+
+`fetch_usage()` returns a status triple — `("ok", (u7,u5))`, `("rate_limited",
+retry_after|None)`, or `("error", None)`. The loop keeps a `next_usage_poll` deadline
+instead of a fixed-interval timestamp: success → `+USAGE_POLL_INTERVAL` and backoff
+reset; 429 → `+max(Retry-After, backoff)` with backoff doubling to `USAGE_BACKOFF_MAX`,
+last value kept on the lamp (rate limiting never clears the bars — AC-15); hard error →
+`+USAGE_POLL_INTERVAL` and the AC-10 fail counter.
 
 - `read_access_token() -> str | None` — `subprocess.run(["security",
   "find-generic-password", "-s", KEYCHAIN_ITEM, "-w"], timeout=10)`, parse JSON,
