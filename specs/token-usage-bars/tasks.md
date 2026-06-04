@@ -129,9 +129,9 @@ grep -i "accessToken\|Bearer" /tmp/claude_lamp_daemon.log && echo "TOKEN LEAKED"
 
 **ACs**: AC-9, AC-10, AC-11. **Files**: `claude_hooks/claude_lamp_daemon.py`
 
-- Add `last_usage_poll = 0.0` / `usage_fail_count` / `last_usage_sent` before the loop;
-  insert the time-gated fetch/send block (immediate first poll, 60 s resend-always,
-  3-failure → `usage -`) per design. No new asyncio tasks (AC-11).
+- Add `next_usage_poll = 0.0` / `usage_backoff` / `usage_fail_count` / `last_usage_sent`
+  before the loop; insert the deadline-gated fetch/send block (immediate first poll,
+  180 s resend-always, 3-hard-failure → `usage -`) per design. No new asyncio tasks (AC-11).
 
 **Verify**:
 ```sh
@@ -141,12 +141,33 @@ kill "$(cat /tmp/claude_lamp_daemon.pid)" 2>/dev/null; rm -f /tmp/claude_lamp_da
 bash ~/.claude/claude_lamp_hooks/claude_lamp_hook.sh idle
 
 tail -f /tmp/claude_lamp_daemon.log   # expect "TX usage P7,P5" within seconds (AC-9),
-                                      # then one TX usage per ~60 s
+                                      # then one TX usage per ~180 s
 ```
 Hardware checks: bars light within seconds of daemon start (AC-9); press ESP32 reset →
-bars reappear ≤60 s (AC-9); turn Wi-Fi off → bars keep last value for 2 polls, dark
-after 3rd (AC-10), recover after Wi-Fi on; status changes remain instant during a poll
-(AC-11).
+bars reappear within one interval (AC-9); turn Wi-Fi off → bars keep last value for 2
+polls, dark after 3rd (AC-10), recover after Wi-Fi on; status changes remain instant
+during a poll (AC-11).
+
+---
+
+## T8 — Daemon: HTTP 429 backoff (AC-15) *(added 2026-06-04 after observed 429s)*
+
+**ACs**: AC-15, AC-9 (interval revision), AC-10 (429 excluded from fail counter).
+**Files**: `claude_hooks/claude_lamp_daemon.py`
+
+- `USAGE_POLL_INTERVAL` 60 → 180 s; add `USAGE_BACKOFF_MAX = 1800`.
+- `fetch_usage()` → status triple; 429 returns `("rate_limited", Retry-After|None)`.
+- Loop: `next_usage_poll` deadline; on 429 back off `max(Retry-After, backoff)`,
+  double backoff up to cap, keep last value (never `usage -` from 429); reset on success.
+
+**Verify**:
+```sh
+claude_hooks/venv/bin/python3 claude_hooks/claude_lamp_daemon.py --once  # ('ok', (u7,u5)) or ('rate_limited', N)
+# deploy + restart (T6 commands), then:
+grep -E "TX usage|backed off|usage HTTP" /tmp/claude_lamp_daemon.log
+# expect: TX usage every ~180 s; on 429: "usage poll backed off Ns" lines with
+# growing N and NO "TX usage -" caused by them
+```
 
 ---
 

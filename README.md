@@ -136,7 +136,7 @@ completes; multi-step turns self-correct on the next tool call.
 
 ## Usage bars
 
-The daemon polls your Claude token utilization every 60 seconds and mirrors it to the
+The daemon polls your Claude token utilization every 3 minutes and mirrors it to the
 top 10 LEDs as remaining-budget fuel gauges — the same numbers `/usage` shows in
 Claude Code:
 
@@ -149,9 +149,10 @@ Claude Code:
   do, fetches fail quietly and the bars stay dark). The token never leaves the machine
   except to Anthropic's API, and is never logged.
 - **Refresh & failure behavior:** first fetch happens immediately on daemon start, then
-  every 60 s (always re-sent, so the bars self-heal within a minute after an ESP32
-  reboot). On fetch errors the last value is kept; after 3 consecutive failures the bars
-  are cleared rather than showing stale data.
+  every 180 s (always re-sent, so the bars self-heal after an ESP32 reboot). On hard
+  fetch errors the last value is kept; after 3 consecutive failures the bars are cleared
+  rather than showing stale data. HTTP 429 (the endpoint does rate-limit) never clears
+  the bars — the daemon just backs off exponentially, up to 30 min.
 - **Standalone test:** `~/.claude/claude_lamp_hooks/venv/bin/python3
   ~/.claude/claude_lamp_hooks/claude_lamp_daemon.py --once` prints the fetched
   `(7d, 5h)` percentages (or `None` on failure) without touching BLE.

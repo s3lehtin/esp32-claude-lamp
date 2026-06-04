@@ -50,12 +50,18 @@ LEDs 26–30 (strip indices 25–29) show the **5-hour window** utilization.
 - **AC-8**: The daemon fetches utilization from the Claude Code OAuth usage endpoint
   using the access token from the macOS Keychain item `Claude Code-credentials`
   *(see Assumptions)* and sends `usage P7,P5` over BLE.
-- **AC-9**: First fetch happens immediately on daemon start; thereafter every 60 s while
-  the daemon runs and the lamp state is not `off`. The value is re-sent every cycle even
-  if unchanged (heals firmware reboots within ≤60 s).
-- **AC-10**: On a fetch failure (keychain missing, token expired, HTTP error, network
-  down, schema mismatch) the last shown value is kept; after **3 consecutive** failures
-  the daemon sends `usage -` to clear the bars. A success resets the failure counter.
+- **AC-9** *(revised 2026-06-04: 60 s → 180 s after observing HTTP 429)*: First fetch
+  happens immediately on daemon start; thereafter every 180 s while the daemon runs and
+  the lamp state is not `off`. The value is re-sent every cycle even if unchanged
+  (heals firmware reboots within one interval).
+- **AC-10**: On a hard fetch failure (keychain missing, token expired, HTTP 401/5xx,
+  network down, schema mismatch) the last shown value is kept; after **3 consecutive**
+  hard failures the daemon sends `usage -` to clear the bars. A success resets the
+  counter.
+- **AC-15** *(added 2026-06-04)*: HTTP 429 is **not** a hard failure: the last value
+  stays on the lamp (never cleared because of rate limiting), and the next poll backs
+  off exponentially — `max(Retry-After, backoff)` with backoff doubling from 180 s up
+  to 1800 s, resetting to 180 s on the next success.
 - **AC-11**: Usage polling never blocks or races the existing 200 ms state loop: BLE
   writes remain serialized on the single client; HTTP runs off the event loop thread.
 - **AC-12**: `claude_lamp_daemon.py --once` performs one fetch (keychain + HTTP + parse),
@@ -90,6 +96,7 @@ LEDs 26–30 (strip indices 25–29) show the **5-hour window** utilization.
   `anthropic-beta: oauth-2025-04-20` is an **unofficial, undocumented endpoint**; the
   endpoint or response schema may change or disappear. Mitigated by AC-10 fail-soft
   behavior and a live validation gate before implementation (tasks T4).
+  *Observed 2026-06-04: HTTP 429 after ~30 min of 60 s polling — hence AC-15 backoff.*
 - **R-2 (medium)**: Keychain JSON field names (`claudeAiOauth.accessToken`,
   `expiresAt` ms-epoch) are assumed, not documented. Validated in T4.
 - **R-3 (medium)**: `security find-generic-password` from a `nohup`-spawned venv python

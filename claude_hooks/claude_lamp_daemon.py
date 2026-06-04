@@ -36,8 +36,9 @@ NAME_PREFIX = "CLAUDE-LAMP"
 
 IDLE_TIMEOUT = 30 * 60  # 30 minutes
 
-USAGE_POLL_INTERVAL = 60          # seconds between utilization fetches
-USAGE_FAIL_CLEAR_THRESHOLD = 3    # consecutive failures -> clear bars ("usage -")
+USAGE_POLL_INTERVAL = 180         # baseline seconds between utilization fetches
+USAGE_BACKOFF_MAX = 1800          # cap for HTTP 429 exponential backoff
+USAGE_FAIL_CLEAR_THRESHOLD = 3    # consecutive hard failures -> clear bars ("usage -")
 KEYCHAIN_ITEM = "Claude Code-credentials"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 OAUTH_BETA = "oauth-2025-04-20"
@@ -132,26 +133,38 @@ def _fetch_usage_blocking(token: str) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
-async def fetch_usage() -> tuple[int, int] | None:
-    """Return (util_7d, util_5h) as ints 0..100, or None on any failure."""
+async def fetch_usage() -> tuple[str, object]:
+    """Fetch utilization. Returns one of:
+      ("ok", (util_7d, util_5h))        ints 0..100
+      ("rate_limited", retry_after)     int seconds or None — last value still valid
+      ("error", None)                   hard failure (token/network/parse)
+    """
     token = read_access_token()
     if not token:
-        return None
+        return ("error", None)
     try:
         body = await asyncio.to_thread(_fetch_usage_blocking, token)
     except urllib.error.HTTPError as e:
+        if e.code == 429:
+            retry_after = None
+            try:
+                retry_after = int(e.headers.get("Retry-After", ""))
+            except (TypeError, ValueError):
+                pass
+            log.warning("usage HTTP 429 (Retry-After=%s)", retry_after)
+            return ("rate_limited", retry_after)
         log.warning("usage HTTP %s", e.code)  # 401 -> token bad; 5xx -> server
-        return None
+        return ("error", None)
     except Exception as e:
         log.warning("usage fetch error: %s", e)  # network down, timeout, ...
-        return None
+        return ("error", None)
     try:
         u7 = int(round(float(body["seven_day"]["utilization"])))
         u5 = int(round(float(body["five_hour"]["utilization"])))
     except (KeyError, TypeError, ValueError) as e:
         log.warning("usage parse error: %s body=%s", e, body)
-        return None
-    return max(0, min(100, u7)), max(0, min(100, u5))
+        return ("error", None)
+    return ("ok", (max(0, min(100, u7)), max(0, min(100, u5))))
 
 
 def read_state() -> str:
@@ -197,7 +210,8 @@ async def main():
     current_state = ""
     idle_since: float | None = None
 
-    last_usage_poll = 0.0  # monotonic; 0 -> first fetch fires immediately
+    next_usage_poll = 0.0  # monotonic deadline; 0 -> first fetch fires immediately
+    usage_backoff = USAGE_POLL_INTERVAL  # grows on HTTP 429, resets on success
     usage_fail_count = 0
     last_usage_sent: tuple[int, int] | None = None
 
@@ -229,17 +243,34 @@ async def main():
                     except Exception:
                         pass
 
-            # Usage poll: every 60s while a non-off state is active. Always
-            # re-sent (not only on change) so a rebooted ESP32 self-heals
-            # within one interval. Runs on this loop -> BLE writes stay
-            # serialized; HTTP happens off-thread via asyncio.to_thread.
+            # Usage poll: every USAGE_POLL_INTERVAL while a non-off state is
+            # active. Always re-sent (not only on change) so a rebooted ESP32
+            # self-heals within one interval. Runs on this loop -> BLE writes
+            # stay serialized; HTTP happens off-thread via asyncio.to_thread.
+            # HTTP 429 backs off exponentially (honoring Retry-After) and keeps
+            # the last value on the lamp — a rate limit is not stale data.
             now_m = time.monotonic()
             if (current_state and current_state != "off"
-                    and now_m - last_usage_poll >= USAGE_POLL_INTERVAL):
-                last_usage_poll = now_m
-                usage = await fetch_usage()
-                if usage is None:
+                    and now_m >= next_usage_poll):
+                status, payload = await fetch_usage()
+                if status == "ok":
+                    usage_fail_count = 0
+                    usage_backoff = USAGE_POLL_INTERVAL
+                    next_usage_poll = now_m + USAGE_POLL_INTERVAL
+                    try:
+                        if client.is_connected:
+                            await send(client, f"usage {payload[0]},{payload[1]}")
+                            last_usage_sent = payload
+                    except Exception as e:
+                        log.error("usage send error: %s", e)
+                elif status == "rate_limited":
+                    delay = max(payload or 0, usage_backoff)
+                    usage_backoff = min(usage_backoff * 2, USAGE_BACKOFF_MAX)
+                    next_usage_poll = now_m + delay
+                    log.info("usage poll backed off %ds", delay)
+                else:  # hard failure: token/network/parse
                     usage_fail_count += 1
+                    next_usage_poll = now_m + USAGE_POLL_INTERVAL
                     if (usage_fail_count >= USAGE_FAIL_CLEAR_THRESHOLD
                             and last_usage_sent is not None):
                         try:
@@ -248,14 +279,6 @@ async def main():
                             last_usage_sent = None
                         except Exception as e:
                             log.error("usage clear send error: %s", e)
-                else:
-                    usage_fail_count = 0
-                    try:
-                        if client.is_connected:
-                            await send(client, f"usage {usage[0]},{usage[1]}")
-                            last_usage_sent = usage
-                    except Exception as e:
-                        log.error("usage send error: %s", e)
 
             # Idle timeout
             if current_state == "idle" and idle_since is not None:
