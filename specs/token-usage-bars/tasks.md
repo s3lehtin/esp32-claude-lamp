@@ -171,6 +171,24 @@ grep -E "TX usage|backed off|usage HTTP" /tmp/claude_lamp_daemon.log
 
 ---
 
+## T9 — Daemon: 5-min API cache (AC-16) *(added 2026-06-04)*
+
+**ACs**: AC-16. **Files**: `claude_hooks/claude_lamp_daemon.py`
+
+- `USAGE_CACHE_FILE` (/tmp JSON `{ts,u7,u5}`) + `USAGE_CACHE_TTL = 300`;
+  `read_usage_cache()` / `write_usage_cache()`.
+- `fetch_usage()` serves fresh cache without HTTP; writes cache on successful fetch.
+
+**Verify**:
+```sh
+claude_hooks/venv/bin/python3 claude_hooks/claude_lamp_daemon.py --once   # populates cache (when not 429'd)
+claude_hooks/venv/bin/python3 claude_hooks/claude_lamp_daemon.py --once   # second run: "usage cache hit" in log, same value
+cat /tmp/claude_lamp_usage_cache.json                                     # {ts, u7, u5}, no token material
+grep "cache hit" /tmp/claude_lamp_daemon.log
+```
+
+---
+
 ## T7 — Docs
 
 **ACs**: documentation for AC-6, AC-8, R-3. **Files**: `README.md`, `CLAUDE.md` (if needed)

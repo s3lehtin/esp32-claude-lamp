@@ -62,6 +62,11 @@ LEDs 26–30 (strip indices 25–29) show the **5-hour window** utilization.
   stays on the lamp (never cleared because of rate limiting), and the next poll backs
   off exponentially — `max(Retry-After, backoff)` with backoff doubling from 180 s up
   to 1800 s, resetting to 180 s on the next success.
+- **AC-16** *(added 2026-06-04)*: Successful fetches are cached on disk
+  (`/tmp/claude_lamp_usage_cache.json`) with a **5-minute TTL**. Polls within the TTL
+  are served from the cache without any HTTP request — so daemon restarts (one per new
+  Claude Code session) do not re-query the API. The lamp resend cadence (AC-9) is
+  unaffected: cache hits still send `usage P7,P5`.
 - **AC-11**: Usage polling never blocks or races the existing 200 ms state loop: BLE
   writes remain serialized on the single client; HTTP runs off the event loop thread.
 - **AC-12**: `claude_lamp_daemon.py --once` performs one fetch (keychain + HTTP + parse),

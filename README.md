@@ -152,7 +152,9 @@ Claude Code:
   every 180 s (always re-sent, so the bars self-heal after an ESP32 reboot). On hard
   fetch errors the last value is kept; after 3 consecutive failures the bars are cleared
   rather than showing stale data. HTTP 429 (the endpoint does rate-limit) never clears
-  the bars — the daemon just backs off exponentially, up to 30 min.
+  the bars — the daemon just backs off exponentially, up to 30 min. Successful results
+  are cached in `/tmp/claude_lamp_usage_cache.json` for 5 minutes, so the API sees at
+  most one query per 5 min even across daemon restarts.
 - **Standalone test:** `~/.claude/claude_lamp_hooks/venv/bin/python3
   ~/.claude/claude_lamp_hooks/claude_lamp_daemon.py --once` prints the fetched
   `(7d, 5h)` percentages (or `None` on failure) without touching BLE.
