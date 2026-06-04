@@ -36,9 +36,11 @@ NAME_PREFIX = "CLAUDE-LAMP"
 
 IDLE_TIMEOUT = 30 * 60  # 30 minutes
 
-USAGE_POLL_INTERVAL = 180         # baseline seconds between utilization fetches
+USAGE_POLL_INTERVAL = 180         # baseline seconds between utilization polls
 USAGE_BACKOFF_MAX = 1800          # cap for HTTP 429 exponential backoff
 USAGE_FAIL_CLEAR_THRESHOLD = 3    # consecutive hard failures -> clear bars ("usage -")
+USAGE_CACHE_FILE = "/tmp/claude_lamp_usage_cache.json"
+USAGE_CACHE_TTL = 300             # 5 min: the API is queried at most this often
 KEYCHAIN_ITEM = "Claude Code-credentials"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 OAUTH_BETA = "oauth-2025-04-20"
@@ -120,6 +122,27 @@ def read_access_token() -> str | None:
         return None
 
 
+def read_usage_cache() -> tuple[int, int] | None:
+    """Return cached (u7, u5) if younger than USAGE_CACHE_TTL, else None."""
+    try:
+        with open(USAGE_CACHE_FILE) as f:
+            d = json.load(f)
+        age = time.time() - float(d["ts"])
+        if 0 <= age < USAGE_CACHE_TTL:
+            return int(d["u7"]), int(d["u5"])
+    except Exception:
+        pass
+    return None
+
+
+def write_usage_cache(u7: int, u5: int):
+    try:
+        with open(USAGE_CACHE_FILE, "w") as f:
+            json.dump({"ts": time.time(), "u7": u7, "u5": u5}, f)
+    except Exception as e:
+        log.warning("usage cache write error: %s", e)
+
+
 def _fetch_usage_blocking(token: str) -> dict:
     req = urllib.request.Request(
         USAGE_URL,
@@ -138,7 +161,14 @@ async def fetch_usage() -> tuple[str, object]:
       ("ok", (util_7d, util_5h))        ints 0..100
       ("rate_limited", retry_after)     int seconds or None — last value still valid
       ("error", None)                   hard failure (token/network/parse)
+
+    Served from the 5-min disk cache when fresh — daemon restarts within the
+    TTL never hit the API.
     """
+    cached = read_usage_cache()
+    if cached is not None:
+        log.info("usage cache hit: %s", cached)
+        return ("ok", cached)
     token = read_access_token()
     if not token:
         return ("error", None)
@@ -164,7 +194,9 @@ async def fetch_usage() -> tuple[str, object]:
     except (KeyError, TypeError, ValueError) as e:
         log.warning("usage parse error: %s body=%s", e, body)
         return ("error", None)
-    return ("ok", (max(0, min(100, u7)), max(0, min(100, u5))))
+    u7, u5 = max(0, min(100, u7)), max(0, min(100, u5))
+    write_usage_cache(u7, u5)
+    return ("ok", (u7, u5))
 
 
 def read_state() -> str:

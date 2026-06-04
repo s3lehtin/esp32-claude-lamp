@@ -199,6 +199,14 @@ reset; 429 → `+max(Retry-After, backoff)` with backoff doubling to `USAGE_BACK
 last value kept on the lamp (rate limiting never clears the bars — AC-15); hard error →
 `+USAGE_POLL_INTERVAL` and the AC-10 fail counter.
 
+**Cache (AC-16)**: `USAGE_CACHE_FILE = "/tmp/claude_lamp_usage_cache.json"`,
+`USAGE_CACHE_TTL = 300`. `fetch_usage()` first tries `read_usage_cache()` (JSON
+`{ts, u7, u5}`, epoch seconds; fresh if `time.time() - ts < TTL`) and returns
+`("ok", cached)` without HTTP; successful HTTP fetches `write_usage_cache()`. This
+decouples the lamp resend cadence (180 s, reboot-heal) from the API query cadence
+(≤1 per 5 min across all daemon restarts). Cache holds only percentages — no
+credential material.
+
 - `read_access_token() -> str | None` — `subprocess.run(["security",
   "find-generic-password", "-s", KEYCHAIN_ITEM, "-w"], timeout=10)`, parse JSON,
   return `claudeAiOauth.accessToken`; return `None` if `expiresAt` (ms epoch, **A-1**)
