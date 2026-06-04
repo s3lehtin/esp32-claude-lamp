@@ -29,10 +29,11 @@ Compiles clean. (Visual check lands in T3's smoke test.)
 
 **ACs**: AC-2, AC-3, AC-4, AC-5, AC-14. **Files**: `firmware/claude_lamp/claude_lamp.ino`
 
-- Implement `barColor()` (integer green→yellow→red ramp), `renderBar(start, util, now)`
-  (full / fractional-dim / dark per LED, `-1` → all dark), `renderUsageBars(now)`.
-- Blink: when `util >= BLINK_THRESHOLD` (95), bar alternates full pattern / dark at
-  ~1 Hz using `now % BLINK_PERIOD_MS` (AC-14); steady below threshold.
+- Implement `barColor()` (integer green→yellow→red ramp keyed to usage),
+  `renderBar(start, util, now)` rendering **remaining** budget `100−util` as a fuel
+  gauge (full / fractional-dim / drained per LED, `-1` → all dark), `renderUsageBars(now)`.
+- Alarm: when `util >= BLINK_THRESHOLD` (95), exactly one full red LED blinking ~1 Hz
+  via `now % BLINK_PERIOD_MS` (AC-14); steady gauge below threshold.
 - Call `renderUsageBars(now)` from `renderFrame()` every frame, before `show()`,
   skipped only in `STATE_OFF`.
 
@@ -40,9 +41,9 @@ Compiles clean. (Visual check lands in T3's smoke test.)
 ```sh
 make compile
 ```
-Desk-check the math: u=73 → LEDs at 255, 255, 255, 65 %, 0; u=0 → all dark;
-u=100 → all full red; u=50 → 2 full + 1 half, yellow (r=255,g=255);
-u=94 → steady; u=95 → blinking; u=-1 → steadily dark (blink path unreachable).
+Desk-check the math (fuel gauge): u=0 → 5 full green; u=30 (r=70) → 3 full + 1 at 50 %;
+u=73 (r=27) → 1 full + 1 at 35 %; u=80 (r=20) → 1 full; u=94 (r=6) → 1 LED at 30 %,
+steady; u=95/100 → 1 red LED blinking; u=-1 → steadily dark.
 
 ---
 
@@ -64,12 +65,13 @@ BLE smoke test (README manual-write procedure, RX `6e400002-b5a3-f393-e0a9-e50e2
 send in order and confirm against the AC in parentheses:
 ```
 working            # breathing confined to LEDs 1–20 (AC-1)
-usage 73,12        # 7d: 3 full + 1 dim + 1 dark; 5h: 1 dim (AC-2); no flicker (AC-4)
-usage 100,0        # 7d all red (AC-3), 5h dark
+usage 0,0          # both gauges full: 5 + 5 green (AC-2)
+usage 73,12        # 7d: 1 full + 1 at 35%; 5h: 4 full + 1 at 40%, greenish (AC-2/AC-3); no flicker (AC-4)
+usage 100,0        # 7d: one blinking red LED (AC-14), 5h full green
 usage 0,100        # inverse
-usage 95,94        # 7d bar blinks ~1 Hz, 5h bar steady (AC-14)
-usage 100,100      # both bars blink red, in sync; status animation unaffected (AC-14)
-usage 999,-5       # clamps to 100,0 → 7d blinks (AC-6 edge, AC-14)
+usage 95,94        # 7d blinks; 5h: 1 LED at 30% steady (AC-14 threshold)
+usage 100,100      # both bars one blinking red LED, in sync; status animation unaffected (AC-14)
+usage 999,-5       # clamps to 100,0 → 7d blinks, 5h full green (AC-6 edge, AC-14)
 usage garbage      # ignored, serial message, bars unchanged (AC-6)
 usage -            # both bars dark (AC-5), status animation unchanged (AC-6)
 input              # bars persist over purple pulse (AC-4)

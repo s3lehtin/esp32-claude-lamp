@@ -12,8 +12,10 @@
  *   off              all LEDs dark
  *   color R,G,B      solid color (0-255 each)
  *   bright N         global brightness cap (0-255)
- *   usage P7,P5      token utilization bargraphs: 7-day % on LEDs 21-25,
- *                    5-hour % on LEDs 26-30 (0-100 each, >=95 blinks)
+ *   usage P7,P5      token utilization fuel gauges: 7-day on LEDs 21-25,
+ *                    5-hour on LEDs 26-30. P = used % (0-100); the bar shows
+ *                    what REMAINS (0% used = 5 green LEDs, drains toward red;
+ *                    >=95% used = one red LED blinking)
  *   usage -          clear both usage bars (unknown -> dark)
  *
  * Status animations use LEDs 1-20; usage bars persist across all states
@@ -99,22 +101,31 @@ static uint32_t barColor(int u) {
   return strip.Color(r, g, 0);
 }
 
-// Paint one 5-LED bar: each LED = 20%, last LED dimmed by the fractional part.
-// util -1 -> all dark (unknown). util >= BLINK_THRESHOLD -> ~1 Hz blink.
+// Fuel gauge: paint REMAINING budget (100-util) — full at 0% usage, drains as
+// usage grows; hue keyed to usage via barColor(). util -1 -> all dark (unknown).
+// util >= BLINK_THRESHOLD -> alarm: one full red LED blinking ~1 Hz, so an
+// exhausted budget never looks like "no data".
 static void renderBar(int start, int util, uint32_t now) {
-  if (util >= BLINK_THRESHOLD && (now % BLINK_PERIOD_MS) >= BLINK_PERIOD_MS / 2) {
+  if (util < 0) {                                   // unknown -> all dark
     for (int i = 0; i < BAR_LEN; i++) strip.setPixelColor(start + i, 0);
-    return;  // dark half of the blink cycle
+    return;
   }
+  if (util >= BLINK_THRESHOLD) {                    // imminent-limit alarm
+    bool on = (now % BLINK_PERIOD_MS) < BLINK_PERIOD_MS / 2;
+    strip.setPixelColor(start, on ? strip.Color(255, 0, 0) : 0);
+    for (int i = 1; i < BAR_LEN; i++) strip.setPixelColor(start + i, 0);
+    return;
+  }
+  int remaining = 100 - util;                       // fuel left
   uint32_t col = barColor(util);
   for (int i = 0; i < BAR_LEN; i++) {
-    int px = start + i, lo = i * 20, hi = lo + 20;  // LED i covers [lo, hi)
-    if (util >= hi) {
+    int px = start + i, lo = i * 20, hi = lo + 20;  // LED i covers [lo, hi) of remaining
+    if (remaining >= hi) {
       strip.setPixelColor(px, col);                 // fully lit
-    } else if (util <= lo) {
-      strip.setPixelColor(px, 0);                   // dark (covers util < 0)
+    } else if (remaining <= lo) {
+      strip.setPixelColor(px, 0);                   // drained
     } else {
-      int frac = util - lo;                         // 1..19 -> proportional dim
+      int frac = remaining - lo;                    // 1..19 -> proportional dim
       strip.setPixelColor(px, strip.Color(
           (uint8_t)(((col >> 16) & 0xFF) * frac / 20),
           (uint8_t)(((col >>  8) & 0xFF) * frac / 20),
