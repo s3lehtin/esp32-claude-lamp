@@ -22,6 +22,7 @@ Already installed on this machine:
 ## Build commands
 
 - `make compile` / `make upload` / `make monitor` (FQBN `esp32:esp32:esp32`, board on `/dev/cu.usbserial-0001`)
+- `./setup.sh` — full vanilla setup (toolchain checks, firmware build/flash, host hooks + venv + settings merge); idempotent, `--host-only` re-deploys the hooks/daemon and restarts the daemon
 
 ## Gotchas
 

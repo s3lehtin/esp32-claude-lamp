@@ -19,6 +19,20 @@ The top of the strip doubles as a token-budget display: LEDs 21–25 show the
 LED = 20% remaining; at ≥95% used a single red LED blinks). Status animations use
 LEDs 1–20. See [Usage bars](#usage-bars).
 
+## Quick start
+
+```sh
+git clone https://github.com/s3lehtin/esp32-claude-lamp.git
+cd esp32-claude-lamp
+./setup.sh
+```
+
+Wire the strip as in [Hardware](#hardware), plug the ESP32 in over USB, and run
+`./setup.sh` — it checks the [prerequisites](#prerequisites), builds and flashes the
+firmware, and installs the macOS side (hooks, daemon, venv). Then restart Claude Code.
+The script is idempotent; re-run it any time. `./setup.sh --host-only` and
+`--firmware-only` run just one half, `--no-flash` skips the upload step.
+
 ## Architecture
 
 ```
@@ -49,12 +63,34 @@ Notes:
   within USB power limits. A 330Ω resistor in the data line and a 470µF cap across power
   are good practice but optional for short strips.
 
+## Prerequisites
+
+Everything runs on macOS (BLE via CoreBluetooth). Install up front:
+
+- [Homebrew](https://brew.sh)
+- `arduino-cli` — `brew install arduino-cli`
+- Python 3.10+ — `brew install python` (macOS's bundled 3.9 is too old)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+
+`./setup.sh` verifies all of the above (and tells you exactly what to install if
+something is missing), then configures the rest itself: the ESP32 board-manager URL, the
+`esp32:esp32` core, and the Adafruit NeoPixel / NimBLE-Arduino libraries. The manual
+equivalent:
+
+```sh
+arduino-cli config init
+arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+make setup
+```
+
 ## Firmware
 
 Configuration constants at the top of [`firmware/claude_lamp/claude_lamp.ino`](firmware/claude_lamp/claude_lamp.ino):
 `LED_PIN` (16), `LED_COUNT` (30), `DEFAULT_BRIGHTNESS` (80), `DEVICE_NAME` (`CLAUDE-LAMP`).
 
 ### Build & flash
+
+`./setup.sh` does all of this on first run. For manual builds and iteration:
 
 ```sh
 make setup     # one-time: install ESP32 core + libraries
@@ -86,7 +122,19 @@ so a fully dark gauge always means "no data", never "limit reached".
 
 ## macOS setup
 
-Requirements: macOS (CoreBluetooth), Python 3.10+ with [bleak](https://github.com/hbldh/bleak).
+```sh
+./setup.sh --host-only   # firmware already flashed? this installs just the macOS side
+```
+
+The script copies the hook + daemon to `~/.claude/claude_lamp_hooks/`, creates a venv
+there with [bleak](https://github.com/hbldh/bleak), and merges the hook entries into
+`~/.claude/settings.json` (the old file is backed up first; re-running is safe and
+updates the entries in place). Then restart Claude Code — the daemon auto-discovers the
+lamp by name. First connection takes a few seconds; tail
+`/tmp/claude_lamp_daemon.log` to watch it.
+
+<details>
+<summary>Manual steps (what the script does)</summary>
 
 ### 1. Copy scripts
 
@@ -108,17 +156,20 @@ python3 -m venv ~/.claude/claude_lamp_hooks/venv   # needs python 3.10+
 
 ### 3. Install the hooks
 
-Merge `claude_hooks/settings.json` into `~/.claude/settings.json`, replacing
-`$CLAUDE_PROJECT_DIR/claude_hooks` with `~/.claude/claude_lamp_hooks`:
+Merge the hook entries from `claude_hooks/settings.json` into `~/.claude/settings.json`,
+replacing `$CLAUDE_PROJECT_DIR/claude_hooks` with the absolute hooks path. This prints
+the substituted config — merging it into your settings file is up to you. Use `$HOME`,
+not `~`: tilde doesn't expand inside the double-quoted command strings.
 
 ```sh
-sed 's|\$CLAUDE_PROJECT_DIR/claude_hooks|~/.claude/claude_lamp_hooks|g' claude_hooks/settings.json
+sed "s|\$CLAUDE_PROJECT_DIR/claude_hooks|$HOME/.claude/claude_lamp_hooks|g" claude_hooks/settings.json
 ```
 
 ### 4. Restart Claude Code
 
-Open a new session — the daemon auto-discovers the lamp by name. First connection takes a
-few seconds; tail the log to watch it.
+Open a new session — the daemon auto-discovers the lamp by name.
+
+</details>
 
 ### Hook event mapping
 
@@ -159,7 +210,8 @@ Claude Code:
   ~/.claude/claude_lamp_hooks/claude_lamp_daemon.py --once` prints the fetched
   `(7d, 5h)` percentages (or `None` on failure) without touching BLE.
 
-After updating the daemon script, redeploy and restart it:
+After updating the daemon script, redeploy with `./setup.sh --host-only` (it also stops
+the running daemon so the next hook event picks up the new code), or manually:
 
 ```sh
 cp claude_hooks/claude_lamp_daemon.py ~/.claude/claude_lamp_hooks/
@@ -217,6 +269,14 @@ rm -f /tmp/claude_lamp_daemon.pid /tmp/claude_lamp_state
 **bleak not found:** the hook tries `venv/` next to itself first, then `python3`,
 `/opt/homebrew/bin/python3`, and `$CONDA_PREFIX/bin/python3` — make sure one of them
 has bleak installed.
+
+**`arduino-cli: command not found` / `Platform 'esp32:esp32' not found`:** see
+[Prerequisites](#prerequisites) — install `arduino-cli` with Homebrew, then let
+`./setup.sh` (or `make setup`) add the board-manager URL and core.
+
+**No serial port found:** use a USB *data* cable (many are charge-only) and check the
+board shows up as `/dev/cu.usbserial-*` / `/dev/cu.SLAB_USBtoUART` / `/dev/cu.wchusbserial*`.
+If it appears under another name, pass it explicitly: `make upload PORT=/dev/cu.…`.
 
 **Flashing fails ("Invalid head of packet" / serial corruption):** don't flash through a
 USB hub or dock — plug the board directly into the Mac. The CP2102 serial stream corrupts
