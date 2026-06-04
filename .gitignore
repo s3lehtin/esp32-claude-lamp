@@ -1,0 +1,12 @@
+# Local clone of the upstream claude-lamp repo (reference only)
+fork/
+
+# Arduino build artifacts
+firmware/claude_lamp/build/
+
+# Python
+claude_hooks/venv/
+__pycache__/
+
+# macOS
+.DS_Store
