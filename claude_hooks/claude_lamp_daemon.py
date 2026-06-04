@@ -6,15 +6,23 @@ claude_lamp_hook.sh.
 
 The firmware renders all animations locally, so each state is sent verbatim
 as an ASCII command: working, idle, input, off.
+
+Additionally polls Claude token utilization (5-hour / 7-day windows) every
+60 s and forwards it as "usage P7,P5" for the bargraph LEDs. Run with --once
+to do a single fetch (keychain + HTTP + parse) and exit without touching BLE.
 """
 
 import asyncio
 import fcntl
+import json
 import logging
 import os
 import signal
+import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 
 from bleak import BleakClient, BleakScanner
 
@@ -27,6 +35,12 @@ NUS_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 NAME_PREFIX = "CLAUDE-LAMP"
 
 IDLE_TIMEOUT = 30 * 60  # 30 minutes
+
+USAGE_POLL_INTERVAL = 60          # seconds between utilization fetches
+USAGE_FAIL_CLEAR_THRESHOLD = 3    # consecutive failures -> clear bars ("usage -")
+KEYCHAIN_ITEM = "Claude Code-credentials"
+USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+OAUTH_BETA = "oauth-2025-04-20"
 
 VALID_STATES = {"working", "idle", "input", "off"}
 
@@ -78,6 +92,68 @@ async def connect_with_retry(device) -> tuple[BleakClient, object]:
     return client, device
 
 
+# ---------- Token utilization fetch ----------
+def read_access_token() -> str | None:
+    """Return the Claude Code OAuth access token from the Keychain, or None.
+
+    Never logs the token itself.
+    """
+    try:
+        out = subprocess.run(
+            ["security", "find-generic-password", "-s", KEYCHAIN_ITEM, "-w"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if out.returncode != 0:
+            log.warning("keychain read failed rc=%s: %s",
+                        out.returncode, out.stderr.strip())
+            return None
+        oauth = json.loads(out.stdout).get("claudeAiOauth") or {}
+        token = oauth.get("accessToken")
+        exp = oauth.get("expiresAt")  # epoch ms
+        if exp is not None and float(exp) <= time.time() * 1000:
+            log.warning("oauth token expired (expiresAt=%s)", exp)
+            return None
+        return token
+    except Exception as e:
+        log.warning("keychain/JSON error: %s", e)
+        return None
+
+
+def _fetch_usage_blocking(token: str) -> dict:
+    req = urllib.request.Request(
+        USAGE_URL,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "anthropic-beta": OAUTH_BETA,
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+async def fetch_usage() -> tuple[int, int] | None:
+    """Return (util_7d, util_5h) as ints 0..100, or None on any failure."""
+    token = read_access_token()
+    if not token:
+        return None
+    try:
+        body = await asyncio.to_thread(_fetch_usage_blocking, token)
+    except urllib.error.HTTPError as e:
+        log.warning("usage HTTP %s", e.code)  # 401 -> token bad; 5xx -> server
+        return None
+    except Exception as e:
+        log.warning("usage fetch error: %s", e)  # network down, timeout, ...
+        return None
+    try:
+        u7 = int(round(float(body["seven_day"]["utilization"])))
+        u5 = int(round(float(body["five_hour"]["utilization"])))
+    except (KeyError, TypeError, ValueError) as e:
+        log.warning("usage parse error: %s body=%s", e, body)
+        return None
+    return max(0, min(100, u7)), max(0, min(100, u5))
+
+
 def read_state() -> str:
     try:
         with open(STATE_FILE) as f:
@@ -121,6 +197,10 @@ async def main():
     current_state = ""
     idle_since: float | None = None
 
+    last_usage_poll = 0.0  # monotonic; 0 -> first fetch fires immediately
+    usage_fail_count = 0
+    last_usage_sent: tuple[int, int] | None = None
+
     try:
         while not shutdown.is_set():
             desired = read_state()
@@ -149,6 +229,34 @@ async def main():
                     except Exception:
                         pass
 
+            # Usage poll: every 60s while a non-off state is active. Always
+            # re-sent (not only on change) so a rebooted ESP32 self-heals
+            # within one interval. Runs on this loop -> BLE writes stay
+            # serialized; HTTP happens off-thread via asyncio.to_thread.
+            now_m = time.monotonic()
+            if (current_state and current_state != "off"
+                    and now_m - last_usage_poll >= USAGE_POLL_INTERVAL):
+                last_usage_poll = now_m
+                usage = await fetch_usage()
+                if usage is None:
+                    usage_fail_count += 1
+                    if (usage_fail_count >= USAGE_FAIL_CLEAR_THRESHOLD
+                            and last_usage_sent is not None):
+                        try:
+                            if client.is_connected:
+                                await send(client, "usage -")
+                            last_usage_sent = None
+                        except Exception as e:
+                            log.error("usage clear send error: %s", e)
+                else:
+                    usage_fail_count = 0
+                    try:
+                        if client.is_connected:
+                            await send(client, f"usage {usage[0]},{usage[1]}")
+                            last_usage_sent = usage
+                    except Exception as e:
+                        log.error("usage send error: %s", e)
+
             # Idle timeout
             if current_state == "idle" and idle_since is not None:
                 if time.monotonic() - idle_since >= IDLE_TIMEOUT:
@@ -176,4 +284,8 @@ async def main():
 
 
 if __name__ == "__main__":
+    if "--once" in sys.argv:
+        # Single usage fetch for testing: no BLE, no lock/PID files.
+        print("usage:", asyncio.run(fetch_usage()))
+        sys.exit(0)
     asyncio.run(main())

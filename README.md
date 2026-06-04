@@ -13,6 +13,11 @@ and macOS only sends state words over BLE.
 | **Needs input** | Gentle purple pulse | Permission request, plan approval, question |
 | **Off** | Dark | Session end |
 
+The top of the strip doubles as a token-utilization display: LEDs 21–25 show the
+**7-day** window and LEDs 26–30 the **5-hour** window as green→yellow→red bargraphs
+(each LED = 20%, blinking at ≥95%). Status animations use LEDs 1–20. See
+[Usage bars](#usage-bars).
+
 ## Architecture
 
 ```
@@ -70,6 +75,11 @@ Nordic UART Service (`6e400001-…`), ASCII commands written to the RX character
 | `working` / `idle` / `input` / `off` | The four states |
 | `color R,G,B` | Solid custom color, e.g. `color 255,0,128` |
 | `bright N` | Brightness cap 0–255, e.g. `bright 120` |
+| `usage P7,P5` | Usage bars: 7-day % on LEDs 21–25, 5-hour % on LEDs 26–30 (0–100 each), e.g. `usage 73,12` |
+| `usage -` | Clear both usage bars (unknown → dark) |
+
+Status commands paint LEDs 1–20 only; the usage bars persist across every state except
+`off`, and a bar at ≥95% blinks at ~1 Hz.
 
 ## macOS setup
 
@@ -120,6 +130,35 @@ few seconds; tail the log to watch it.
 or answer a question. Known limitation: there is no "permission granted" hook event, so
 during a single *long-running* approved command the lamp stays purple until that command
 completes; multi-step turns self-correct on the next tool call.
+
+## Usage bars
+
+The daemon polls your Claude token utilization every 60 seconds and mirrors it to the
+top 10 LEDs — the same numbers `/usage` shows in Claude Code:
+
+- **Data source:** the Claude Code OAuth token is read from the macOS Keychain item
+  `Claude Code-credentials` and used against `https://api.anthropic.com/api/oauth/usage`.
+  ⚠️ This is an **unofficial, undocumented endpoint** — it may change or disappear at any
+  time. If it breaks, the bars simply go dark; everything else keeps working.
+- **Keychain prompt:** the first fetch may pop a macOS dialog asking to allow access to
+  `Claude Code-credentials` — click **Always Allow** (the daemon runs headless; until you
+  do, fetches fail quietly and the bars stay dark). The token never leaves the machine
+  except to Anthropic's API, and is never logged.
+- **Refresh & failure behavior:** first fetch happens immediately on daemon start, then
+  every 60 s (always re-sent, so the bars self-heal within a minute after an ESP32
+  reboot). On fetch errors the last value is kept; after 3 consecutive failures the bars
+  are cleared rather than showing stale data.
+- **Standalone test:** `~/.claude/claude_lamp_hooks/venv/bin/python3
+  ~/.claude/claude_lamp_hooks/claude_lamp_daemon.py --once` prints the fetched
+  `(7d, 5h)` percentages (or `None` on failure) without touching BLE.
+
+After updating the daemon script, redeploy and restart it:
+
+```sh
+cp claude_hooks/claude_lamp_daemon.py ~/.claude/claude_lamp_hooks/
+kill "$(cat /tmp/claude_lamp_daemon.pid 2>/dev/null)" 2>/dev/null
+rm -f /tmp/claude_lamp_daemon.pid   # next hook event respawns the new daemon
+```
 
 ## Daemon lifecycle
 
