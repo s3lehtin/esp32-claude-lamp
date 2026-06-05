@@ -13,11 +13,11 @@ and macOS only sends state words over BLE.
 | **Needs input** | Gentle purple pulse | Permission request, plan approval, question |
 | **Off** | Dark | Session end |
 
-The top of the strip doubles as a token-budget display: LEDs 21–25 show the
-**7-day** window and LEDs 26–30 the **5-hour** window as fuel gauges — at 0% usage all
+The strip doubles as a token-budget display: LEDs 1–5 show the
+**5-hour** window and LEDs 6–10 the **7-day** window as fuel gauges — at 0% usage all
 5 LEDs glow green; the bar drains and shifts green→yellow→red as usage climbs (each
 LED = 20% remaining; at ≥95% used a single red LED blinks). Status animations use
-LEDs 1–20. See [Usage bars](#usage-bars).
+LED 0. See [Usage bars](#usage-bars).
 
 ## Quick start
 
@@ -59,8 +59,9 @@ Claude Code hook event
 Notes:
 - The ESP32 outputs 3.3V data; for short strips this is normally fine. If you see glitches,
   add a level shifter (74AHCT125) or a single "sacrificial" pixel powered at ~4.3V.
-- Brightness is capped at 80/255 by default (`DEFAULT_BRIGHTNESS` in the sketch) to stay
-  within USB power limits. A 330Ω resistor in the data line and a 470µF cap across power
+- Brightness is capped at 120/255 by default (`DEFAULT_BRIGHTNESS` in the sketch) to stay
+  within USB power limits; the gauge LEDs render at 1/3 of that (`GAUGE_DIM_DIV`) so the
+  status LED stands out. A 330Ω resistor in the data line and a 470µF cap across power
   are good practice but optional for short strips.
 
 ## Prerequisites
@@ -112,10 +113,10 @@ Nordic UART Service (`6e400001-…`), ASCII commands written to the RX character
 | `working` / `idle` / `input` / `off` | The four states |
 | `color R,G,B` | Solid custom color, e.g. `color 255,0,128` |
 | `bright N` | Brightness cap 0–255, e.g. `bright 120` |
-| `usage P7,P5` | Usage gauges: 7-day used-% on LEDs 21–25, 5-hour used-% on LEDs 26–30 (0–100 each), e.g. `usage 73,12` |
+| `usage P7,P5` | Usage gauges: 7-day used-% on LEDs 6–10, 5-hour used-% on LEDs 1–5 (0–100 each), e.g. `usage 73,12` |
 | `usage -` | Clear both usage gauges (unknown → dark) |
 
-Status commands paint LEDs 1–20 only; the usage gauges persist across every state except
+Status commands paint LED 0 only; the usage gauges persist across every state except
 `off`. The command carries *used* percent, but the bar renders what *remains*: full green
 at 0% used, draining toward red, and a single red LED blinking at ~1 Hz from 95% used —
 so a fully dark gauge always means "no data", never "limit reached".
@@ -187,8 +188,8 @@ completes; multi-step turns self-correct on the next tool call.
 
 ## Usage bars
 
-The daemon polls your Claude token utilization every 3 minutes and mirrors it to the
-top 10 LEDs as remaining-budget fuel gauges — the same numbers `/usage` shows in
+The daemon polls your Claude token utilization every 3 minutes and mirrors it to
+LEDs 1–10 as remaining-budget fuel gauges — the same numbers `/usage` shows in
 Claude Code:
 
 - **Data source:** the Claude Code OAuth token is read from the macOS Keychain item

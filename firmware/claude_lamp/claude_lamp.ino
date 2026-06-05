@@ -12,13 +12,13 @@
  *   off              all LEDs dark
  *   color R,G,B      solid color (0-255 each)
  *   bright N         global brightness cap (0-255)
- *   usage P7,P5      token utilization fuel gauges: 7-day on LEDs 21-25,
- *                    5-hour on LEDs 26-30. P = used % (0-100); the bar shows
+ *   usage P7,P5      token utilization fuel gauges: 5-hour on LEDs 1-5,
+ *                    7-day on LEDs 6-10. P = used % (0-100); the bar shows
  *                    what REMAINS (0% used = 5 green LEDs, drains toward red;
  *                    >=95% used = one red LED blinking)
  *   usage -          clear both usage bars (unknown -> dark)
  *
- * Status animations use LEDs 1-20; usage bars persist across all states
+ * Status animations use LED 0; usage bars persist across all states
  * except "off".
  *
  * Board: classic ESP32 DevKit (esp32:esp32:esp32)
@@ -30,8 +30,9 @@
 
 // ---------- Configuration ----------
 #define LED_PIN        16            // WS2812B data pin
-#define LED_COUNT      30            // number of pixels on the strip
-#define DEFAULT_BRIGHTNESS 80        // 0-255; conservative cap for USB power
+#define LED_COUNT      11            // number of pixels on the strip
+#define DEFAULT_BRIGHTNESS 120       // 0-255; status-LED level (1.5x the old 80)
+#define GAUGE_DIM_DIV   3            // gauge LEDs at 1/3 of global = 0.5x the old level
 #define DEVICE_NAME    "CLAUDE-LAMP"
 
 // Nordic UART Service — same UUIDs the Moonside daemon already targets.
@@ -41,10 +42,10 @@
 
 #define FRAME_INTERVAL_MS 20         // ~50 fps animation tick
 
-// Strip partition: status animation on 0..19, usage bargraphs on 20..29.
-#define STATUS_LEDS    20            // indices 0..19: status animation
-#define BAR7_START     20            // 7-day usage bar: indices 20..24
-#define BAR5_START     25            // 5-hour usage bar: indices 25..29
+// Strip partition: status on LED 0, 5-hour bar on 1..5, 7-day bar on 6..10.
+#define STATUS_LEDS     1            // index 0: status animation
+#define BAR5_START      1            // 5-hour usage bar: indices 1..5
+#define BAR7_START      6            // 7-day usage bar: indices 6..10
 #define BAR_LEN         5
 #define BLINK_THRESHOLD 95           // util >= this -> bar blinks (imminent limit)
 #define BLINK_PERIOD_MS 1000         // ~1 Hz: 500 ms on, 500 ms off
@@ -91,7 +92,7 @@ static void animInput(uint32_t now) {
   fillColor((uint8_t)(180 * level), 0, (uint8_t)(255 * level));
 }
 
-// ---------- Usage bargraphs (indices 20..29) ----------
+// ---------- Usage bargraphs (indices 1..10) ----------
 // Map utilization 0..100 to green -> yellow -> red; whole bar one hue.
 static uint32_t barColor(int u) {
   u = constrain(u, 0, 100);
@@ -112,12 +113,16 @@ static void renderBar(int start, int util, uint32_t now) {
   }
   if (util >= BLINK_THRESHOLD) {                    // imminent-limit alarm
     bool on = (now % BLINK_PERIOD_MS) < BLINK_PERIOD_MS / 2;
-    strip.setPixelColor(start, on ? strip.Color(255, 0, 0) : 0);
+    strip.setPixelColor(start, on ? strip.Color(255 / GAUGE_DIM_DIV, 0, 0) : 0);
     for (int i = 1; i < BAR_LEN; i++) strip.setPixelColor(start + i, 0);
     return;
   }
   int remaining = 100 - util;                       // fuel left
   uint32_t col = barColor(util);
+  col = strip.Color(                                // gauges run dimmer than status
+      (uint8_t)(((col >> 16) & 0xFF) / GAUGE_DIM_DIV),
+      (uint8_t)(((col >>  8) & 0xFF) / GAUGE_DIM_DIV),
+      (uint8_t)(( col        & 0xFF) / GAUGE_DIM_DIV));
   for (int i = 0; i < BAR_LEN; i++) {
     int px = start + i, lo = i * 20, hi = lo + 20;  // LED i covers [lo, hi) of remaining
     if (remaining >= hi) {
@@ -146,7 +151,7 @@ static void renderFrame(uint32_t now) {
   forceRender = false;
 
   if (lampState == STATE_OFF) {
-    strip.clear();   // all 30 dark, usage bars included
+    strip.clear();   // all 11 dark, usage bars included
     strip.show();
     return;
   }
