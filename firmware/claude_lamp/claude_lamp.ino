@@ -6,9 +6,9 @@
  * RX characteristic; all animation is rendered locally on the ESP32.
  *
  * Commands (ASCII, optional trailing newline):
- *   working          slow breathing white <-> navy
+ *   working          slow yellow-green pulse
  *   idle             solid warm amber
- *   input            gentle purple pulse
+ *   input            bright red pulse
  *   off              all LEDs dark
  *   color R,G,B      solid color (0-255 each)
  *   bright N         global brightness cap (0-255)
@@ -68,10 +68,6 @@ volatile int16_t util5 = -1;         // 5-hour utilization 0..100, -1 = unknown
 volatile bool forceRender = false;   // set by "bright" to repaint static states
 
 // ---------- Animation helpers ----------
-static uint8_t lerp8(uint8_t a, uint8_t b, float t) {
-  return (uint8_t)(a + (b - a) * t);
-}
-
 // Fill the status area only; strip.show() happens once per frame in renderFrame().
 static void fillColor(uint8_t r, uint8_t g, uint8_t b) {
   for (int i = 0; i < STATUS_LEDS; i++) {
@@ -79,17 +75,18 @@ static void fillColor(uint8_t r, uint8_t g, uint8_t b) {
   }
 }
 
-// working: breathe between white and navy, 4 s period
+// working: yellow-green pulse between 30% and 100%, 4 s period, never dark
 static void animWorking(uint32_t now) {
   float t = (sinf(now * (2.0f * PI / 4000.0f)) + 1.0f) * 0.5f;
-  fillColor(lerp8(0, 255, t), lerp8(0, 255, t), lerp8(80, 255, t));
+  float level = 0.3f + 0.7f * t;
+  fillColor((uint8_t)(160 * level), (uint8_t)(255 * level), 0);
 }
 
-// input: purple pulse between 30% and 100%, 2 s period, never fully dark
+// input: bright red pulse between 30% and 100%, 2 s period, never fully dark
 static void animInput(uint32_t now) {
   float t = (sinf(now * (2.0f * PI / 2000.0f)) + 1.0f) * 0.5f;  // 0..1
   float level = 0.3f + 0.7f * t;
-  fillColor((uint8_t)(180 * level), 0, (uint8_t)(255 * level));
+  fillColor((uint8_t)(255 * level), 0, 0);
 }
 
 // ---------- Usage bargraphs (indices 1..10) ----------
