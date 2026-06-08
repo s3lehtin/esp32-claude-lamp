@@ -10,9 +10,9 @@ and macOS only sends state words over BLE.
 
 | State | Effect | Trigger |
 |---|---|---|
-| **Working** | Slow breathing white ↔ navy | Prompt submit, tool use |
+| **Working** | Slow yellow-green pulse | Prompt submit, tool use |
 | **Idle** | Solid warm amber | Claude finishes responding, session start |
-| **Needs input** | Gentle purple pulse | Permission request, plan approval, question |
+| **Needs input** | Bright red pulse | Permission request, plan approval, question |
 | **Off** | Dark | Session end |
 
 The strip doubles as a token-budget display: LEDs 1–5 show the
@@ -183,10 +183,10 @@ Open a new session — the daemon auto-discovers the lamp by name.
 | `PreToolUse: AskUserQuestion/ExitPlanMode`, `PermissionRequest`, `Notification: permission_prompt` | input |
 | `SessionEnd` | off |
 
-`PostToolUse → working` makes the lamp return to breathing after you approve a permission
-or answer a question. Known limitation: there is no "permission granted" hook event, so
-during a single *long-running* approved command the lamp stays purple until that command
-completes; multi-step turns self-correct on the next tool call.
+`PostToolUse → working` makes the lamp return to the working pulse after you approve a
+permission or answer a question. Known limitation: there is no "permission granted" hook
+event, so during a single *long-running* approved command the lamp stays red until that
+command completes; multi-step turns self-correct on the next tool call.
 
 ## Usage bars
 
