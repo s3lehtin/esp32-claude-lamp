@@ -6,6 +6,8 @@ built on an ESP32 DevKit and a WS2812B LED strip. Fork of
 commercial Moonside lamp replaced by DIY hardware — animations are rendered on the ESP32,
 and macOS only sends state words over BLE.
 
+![The finished lamp — WS2812B strip showing the 5-hour and 7-day usage bars in green, driven by the BLE daemon](images/lamp.png)
+
 | State | Effect | Trigger |
 |---|---|---|
 | **Working** | Slow breathing white ↔ navy | Prompt submit, tool use |
