@@ -47,6 +47,11 @@
 #define BAR5_START      1            // 5-hour usage bar: indices 1..5
 #define BAR7_START      6            // 7-day usage bar: indices 6..10
 #define BAR_LEN         5
+// Fill direction per bar: 0 = LED at *_START is the last one to drain,
+// 1 = the far LED (*_START + BAR_LEN - 1) is the last one to drain. Set these
+// to match how the strip is physically mounted.
+#define BAR5_REVERSE    1
+#define BAR7_REVERSE    0
 #define BLINK_THRESHOLD 95           // util >= this -> bar blinks (imminent limit)
 #define BLINK_PERIOD_MS 1000         // ~1 Hz: 500 ms on, 500 ms off
 
@@ -103,15 +108,20 @@ static uint32_t barColor(int u) {
 // usage grows; hue keyed to usage via barColor(). util -1 -> all dark (unknown).
 // util >= BLINK_THRESHOLD -> alarm: one full red LED blinking ~1 Hz, so an
 // exhausted budget never looks like "no data".
-static void renderBar(int start, int util, uint32_t now) {
+// `reverse` flips which end of the segment holds the last-remaining LED.
+static void renderBar(int start, int util, uint32_t now, bool reverse) {
+  // Segment slot i (0 = last to drain) -> physical pixel index.
+  auto pixelAt = [start, reverse](int i) {
+    return reverse ? start + (BAR_LEN - 1 - i) : start + i;
+  };
   if (util < 0) {                                   // unknown -> all dark
     for (int i = 0; i < BAR_LEN; i++) strip.setPixelColor(start + i, 0);
     return;
   }
   if (util >= BLINK_THRESHOLD) {                    // imminent-limit alarm
     bool on = (now % BLINK_PERIOD_MS) < BLINK_PERIOD_MS / 2;
-    strip.setPixelColor(start, on ? strip.Color(255 / GAUGE_DIM_DIV, 0, 0) : 0);
-    for (int i = 1; i < BAR_LEN; i++) strip.setPixelColor(start + i, 0);
+    strip.setPixelColor(pixelAt(0), on ? strip.Color(255 / GAUGE_DIM_DIV, 0, 0) : 0);
+    for (int i = 1; i < BAR_LEN; i++) strip.setPixelColor(pixelAt(i), 0);
     return;
   }
   int remaining = 100 - util;                       // fuel left
@@ -121,7 +131,7 @@ static void renderBar(int start, int util, uint32_t now) {
       (uint8_t)(((col >>  8) & 0xFF) / GAUGE_DIM_DIV),
       (uint8_t)(( col        & 0xFF) / GAUGE_DIM_DIV));
   for (int i = 0; i < BAR_LEN; i++) {
-    int px = start + i, lo = i * 20, hi = lo + 20;  // LED i covers [lo, hi) of remaining
+    int px = pixelAt(i), lo = i * 20, hi = lo + 20; // slot i covers [lo, hi) of remaining
     if (remaining >= hi) {
       strip.setPixelColor(px, col);                 // fully lit
     } else if (remaining <= lo) {
@@ -137,8 +147,8 @@ static void renderBar(int start, int util, uint32_t now) {
 }
 
 static void renderUsageBars(uint32_t now) {
-  renderBar(BAR7_START, util7, now);
-  renderBar(BAR5_START, util5, now);
+  renderBar(BAR7_START, util7, now, BAR7_REVERSE);
+  renderBar(BAR5_START, util5, now, BAR5_REVERSE);
 }
 
 static void renderFrame(uint32_t now) {
